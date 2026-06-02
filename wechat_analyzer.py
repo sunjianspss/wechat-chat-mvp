@@ -9,6 +9,7 @@ deduplicates repeated lines, and writes local Markdown/JSON outputs.
 from __future__ import annotations
 
 import argparse
+import csv
 import dataclasses
 import datetime as dt
 import hashlib
@@ -32,6 +33,10 @@ CONTROL_BIN = ROOT / ".bin" / "mac_control"
 DEFAULT_OUT = ROOT / "runs"
 ACCESSIBILITY_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 SCREEN_RECORDING_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+
+
+def is_macos() -> bool:
+    return sys.platform == "darwin"
 
 
 PERMISSION_HELP = """
@@ -96,6 +101,15 @@ def ensure_tool(name: str) -> str:
     return path
 
 
+def require_macos(feature: str) -> None:
+    if not is_macos():
+        raise SystemExit(
+            f"{feature} is macOS-only in this MVP. "
+            "On Windows, use `ocr` with `--ocr-engine tesseract` for screenshots, "
+            "or `summarize` on an existing text file."
+        )
+
+
 def apple_script(script: str) -> str:
     ensure_tool("osascript")
     result = run_command(["osascript", "-e", script])
@@ -103,6 +117,7 @@ def apple_script(script: str) -> str:
 
 
 def compile_swift_helper(source: Path, binary: Path, label: str) -> Path:
+    require_macos(f"{label} helper")
     ensure_tool("swiftc")
     if not source.exists():
         raise SystemExit(f"Missing {label} helper: {source}")
@@ -232,6 +247,7 @@ def capture_screenshot(rect: CaptureRect, output: Path) -> None:
 
 
 def capture(args: argparse.Namespace) -> Path:
+    require_macos("Automatic WeChat capture")
     apply_quality_profile(args)
     run_dir = args.output or (DEFAULT_OUT / timestamp())
     screenshots = run_dir / "screenshots"
@@ -339,12 +355,95 @@ def run_ocr_helper(helper: Path, image: Path, languages: str, scale: float, mode
     return lines
 
 
+def join_ocr_words(words: list[str]) -> str:
+    text = " ".join(word for word in words if word.strip())
+    return re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text).strip()
+
+
+def run_tesseract_ocr(image: Path, languages: str) -> list[dict]:
+    ensure_tool("tesseract")
+    try:
+        result = run_command(["tesseract", str(image), "stdout", "-l", languages, "tsv"])
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(
+            f"Tesseract OCR failed for {image}\n"
+            f"stdout: {exc.stdout.strip()}\n"
+            f"stderr: {exc.stderr.strip()}\n\n"
+            "On Windows, install Tesseract OCR and the Chinese language data "
+            "(`chi_sim`) before using this engine."
+        ) from exc
+
+    rows = list(csv.DictReader(result.stdout.splitlines(), delimiter="\t"))
+    groups: dict[tuple[str, str, str, str], list[dict]] = {}
+    max_right = 1
+    max_bottom = 1
+    for row in rows:
+        text = (row.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            confidence = float(row.get("conf") or -1)
+            left = int(float(row.get("left") or 0))
+            top = int(float(row.get("top") or 0))
+            width = int(float(row.get("width") or 0))
+            height = int(float(row.get("height") or 0))
+        except ValueError:
+            continue
+        if confidence < 0:
+            continue
+        max_right = max(max_right, left + width)
+        max_bottom = max(max_bottom, top + height)
+        key = (
+            row.get("page_num") or "1",
+            row.get("block_num") or "0",
+            row.get("par_num") or "0",
+            row.get("line_num") or "0",
+        )
+        groups.setdefault(key, []).append({
+            "text": text,
+            "confidence": confidence / 100.0,
+            "left": left,
+            "top": top,
+            "width": width,
+            "height": height,
+        })
+
+    lines: list[dict] = []
+    for words in groups.values():
+        words = sorted(words, key=lambda item: (item["top"], item["left"]))
+        text = join_ocr_words([str(word["text"]) for word in words])
+        if not text:
+            continue
+        left = min(int(word["left"]) for word in words)
+        top = min(int(word["top"]) for word in words)
+        right = max(int(word["left"]) + int(word["width"]) for word in words)
+        bottom = max(int(word["top"]) + int(word["height"]) for word in words)
+        confidence = sum(float(word["confidence"]) for word in words) / len(words)
+        lines.append({
+            "text": text,
+            "confidence": confidence,
+            "x": left / max_right,
+            "y": 1.0 - (bottom / max_bottom),
+            "width": (right - left) / max_right,
+            "height": (bottom - top) / max_bottom,
+            "source": str(image),
+            "ocr_mode": "tesseract",
+        })
+    return sorted(lines, key=lambda item: (-float(item.get("y", 0)), float(item.get("x", 0))))
+
+
 def ocr_image(helper: Path, image: Path, languages: str, scale: float, mode: str) -> list[dict]:
     if mode != "best":
         return run_ocr_helper(helper, image, languages, scale, mode)
     enhanced = run_ocr_helper(helper, image, languages, scale, "enhanced")
     raw = run_ocr_helper(helper, image, languages, 1.0, "raw")
     return merge_ocr_passes(enhanced, raw)
+
+
+def resolve_ocr_engine(engine: str) -> str:
+    if engine != "auto":
+        return engine
+    return "vision" if is_macos() else "tesseract"
 
 
 def ocr(args: argparse.Namespace) -> Path:
@@ -362,14 +461,19 @@ def ocr(args: argparse.Namespace) -> Path:
         out_dir = input_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    helper = ensure_ocr_helper()
+    engine = resolve_ocr_engine(args.ocr_engine)
+    helper = ensure_ocr_helper() if engine == "vision" else None
     images = image_files(input_path)
     if not images:
         raise SystemExit(f"No screenshots found in: {input_path}")
 
     all_lines: list[dict] = []
     for image in images:
-        lines = ocr_image(helper, image, args.languages, args.ocr_scale, args.ocr_mode)
+        if engine == "vision":
+            assert helper is not None
+            lines = ocr_image(helper, image, args.languages, args.ocr_scale, args.ocr_mode)
+        else:
+            lines = run_tesseract_ocr(image, args.tesseract_langs)
         all_lines.extend(lines)
         print(f"[ocr] {image.name}: {len(lines)} lines")
 
@@ -386,12 +490,32 @@ def ocr(args: argparse.Namespace) -> Path:
             if all_lines else 0
         ),
         "ocr_mode": args.ocr_mode,
+        "ocr_engine": engine,
         "ocr_scale": args.ocr_scale,
-        "languages": args.languages,
+        "languages": args.languages if engine == "vision" else args.tesseract_langs,
     }
     stats_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[ocr] wrote: {raw_path}")
     return out_dir
+
+
+def raw_lines_from_text(path: Path) -> list[dict]:
+    lines: list[dict] = []
+    for index, text in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        text = text.strip()
+        if not text:
+            continue
+        lines.append({
+            "text": text,
+            "confidence": 1.0,
+            "x": 0.1,
+            "y": 0.5,
+            "width": 0.8,
+            "height": 0.02,
+            "source": str(path),
+            "line_number": index,
+        })
+    return lines
 
 
 NOISE_PATTERNS = [
@@ -662,12 +786,23 @@ def summarize(args: argparse.Namespace) -> Path:
     if input_path.is_dir():
         raw_path = input_path / "ocr_raw.json"
         out_dir = input_path
+        if not raw_path.exists():
+            raise SystemExit(
+                f"OCR JSON not found: {raw_path}\n"
+                "For Windows/manual use, pass a text file directly: "
+                "`python wechat_analyzer.py summarize chat.txt -o runs/manual`."
+            )
+        raw_lines = json.loads(raw_path.read_text(encoding="utf-8"))
     else:
-        raw_path = input_path
-        out_dir = args.output or input_path.parent
-    if not raw_path.exists():
-        raise SystemExit(f"OCR JSON not found: {raw_path}")
-    raw_lines = json.loads(raw_path.read_text(encoding="utf-8"))
+        if not input_path.exists():
+            raise SystemExit(f"Input does not exist: {input_path}")
+        if input_path.suffix.lower() == ".json":
+            raw_path = input_path
+            out_dir = args.output or input_path.parent
+            raw_lines = json.loads(raw_path.read_text(encoding="utf-8"))
+        else:
+            out_dir = args.output or (DEFAULT_OUT / timestamp())
+            raw_lines = raw_lines_from_text(input_path)
     lines = clean_lines(raw_lines, fuzzy_window=args.dedupe_window)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "clean_stats.json").write_text(
@@ -735,11 +870,20 @@ def cleanup(args: argparse.Namespace) -> None:
 
 
 def doctor(args: argparse.Namespace) -> None:
+    print(f"[doctor] platform: {sys.platform}")
     print("[doctor] checking local tools")
-    for tool in ["uv", "screencapture", "osascript", "swiftc"]:
+    tools = ["uv"]
+    tools.extend(["screencapture", "osascript", "swiftc"] if is_macos() else ["tesseract"])
+    for tool in tools:
         path = shutil.which(tool)
         status = path or "missing"
         print(f"- {tool}: {status}")
+
+    if not is_macos():
+        print("[doctor] Windows/Linux mode: automatic WeChat capture is not available")
+        print("- use: python wechat_analyzer.py summarize chat.txt -o runs/manual")
+        print("- optional OCR: install Tesseract, then run `ocr --ocr-engine tesseract`")
+        return
 
     print("[doctor] checking OCR helper")
     try:
@@ -765,6 +909,7 @@ def doctor(args: argparse.Namespace) -> None:
 
 
 def permissions(args: argparse.Namespace) -> None:
+    require_macos("macOS privacy permissions")
     print(PERMISSION_HELP)
     if args.open:
         ensure_tool("open")
@@ -779,8 +924,10 @@ def run_all(args: argparse.Namespace) -> Path:
         input=run_dir / "screenshots",
         output=run_dir,
         languages=args.languages,
+        tesseract_langs=args.tesseract_langs,
         ocr_scale=args.ocr_scale,
         ocr_mode=args.ocr_mode,
+        ocr_engine=args.ocr_engine,
     )
     ocr(ocr_args)
     summarize_args = argparse.Namespace(input=run_dir, output=run_dir, dedupe_window=args.dedupe_window)
@@ -800,7 +947,9 @@ def build_parser() -> argparse.ArgumentParser:
     ocr_parser = sub.add_parser("ocr", help="OCR a screenshot file or folder")
     ocr_parser.add_argument("input", help="Screenshot file/folder, or a run/screenshots folder")
     ocr_parser.add_argument("-o", "--output", type=Path, help="Output directory")
+    ocr_parser.add_argument("--ocr-engine", choices=["auto", "vision", "tesseract"], default="auto", help="OCR engine. auto uses macOS Vision on macOS and Tesseract elsewhere")
     ocr_parser.add_argument("--languages", default="zh-Hans,en-US", help="Vision OCR languages, or auto")
+    ocr_parser.add_argument("--tesseract-langs", default="chi_sim+eng", help="Tesseract language set, for example chi_sim+eng")
     ocr_parser.add_argument("--ocr-scale", type=float, default=1.5, help="Upscale factor before OCR")
     ocr_parser.add_argument("--ocr-mode", choices=["best", "enhanced", "raw"], default="best", help="Image preprocessing mode")
     ocr_parser.set_defaults(func=ocr)
@@ -828,7 +977,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = sub.add_parser("run", help="Capture, OCR, clean, and summarize in one command")
     add_capture_args(run_parser)
+    run_parser.add_argument("--ocr-engine", choices=["auto", "vision", "tesseract"], default="auto", help="OCR engine. macOS capture normally uses Vision")
     run_parser.add_argument("--languages", default="zh-Hans,en-US", help="Vision OCR languages, or auto")
+    run_parser.add_argument("--tesseract-langs", default="chi_sim+eng", help="Tesseract language set when using --ocr-engine tesseract")
     run_parser.add_argument("--ocr-scale", type=float, default=1.5, help="Upscale factor before OCR")
     run_parser.add_argument("--ocr-mode", choices=["best", "enhanced", "raw"], default="best", help="Image preprocessing mode")
     run_parser.add_argument("--dedupe-window", type=int, default=60, help="Recent-line dedupe window")

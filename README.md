@@ -8,7 +8,16 @@
 
 不解密数据库，不提取密钥，不上传聊天记录。
 
-## 使用
+## 平台支持
+
+| 平台 | 能力 |
+| --- | --- |
+| macOS | 自动截图、自动滚动、macOS Vision OCR、清洗总结 |
+| Windows | 已有文本清洗总结；已有截图可选 Tesseract OCR |
+
+自动控制微信窗口依赖 macOS 的 `screencapture`、Accessibility 和 Screen Recording 权限，Windows 版微信暂不做自动截图控制。Windows 上建议先把聊天内容复制成 `.txt`，或用系统/第三方截图后再导入。
+
+## macOS 使用
 
 先打开微信目标聊天窗口，关闭图片预览、视频预览等浮层，然后运行：
 
@@ -30,6 +39,35 @@ UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.p
 - `Privacy & Security -> Screen Recording`
 
 改完权限后重启终端，再跑 `doctor`。能看到微信窗口坐标就可以采集。
+
+## Windows 使用
+
+安装 `uv` 后，在 PowerShell 里运行：
+
+```powershell
+cd C:\path\to\wechat-chat-mvp
+$env:UV_CACHE_DIR = "$env:TEMP\uv-cache"
+uv run --python 3.12 python wechat_analyzer.py doctor
+```
+
+分析已有文本：
+
+```powershell
+.\analyze_text.ps1 .\chat.txt .\runs\manual
+```
+
+也可以不用脚本：
+
+```powershell
+uv run --python 3.12 python wechat_analyzer.py summarize .\chat.txt -o .\runs\manual
+```
+
+如果要分析已有截图，先安装 Tesseract OCR 和中文语言包 `chi_sim`，再运行：
+
+```powershell
+uv run --python 3.12 python wechat_analyzer.py ocr .\screenshots --ocr-engine tesseract --tesseract-langs chi_sim+eng -o .\runs\manual
+uv run --python 3.12 python wechat_analyzer.py summarize .\runs\manual
+```
 
 ## 输出
 
@@ -96,6 +134,13 @@ OCR 不准时，优先试更高放大倍率；默认是 `--ocr-mode best --ocr-s
 ```bash
 UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py ocr /path/to/screenshots
 UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py summarize /path/to/screenshots
+```
+
+Windows 已有截图使用：
+
+```powershell
+uv run --python 3.12 python wechat_analyzer.py ocr .\screenshots --ocr-engine tesseract --tesseract-langs chi_sim+eng -o .\runs\manual
+uv run --python 3.12 python wechat_analyzer.py summarize .\runs\manual
 ```
 
 ## 清理

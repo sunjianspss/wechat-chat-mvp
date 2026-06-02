@@ -24,6 +24,7 @@
 | --- | --- |
 | `wechat_analyzer.py` | 主流程：截图、OCR、清洗、总结、清理 |
 | `run_wechat.sh` | 常用运行入口 |
+| `analyze_text.ps1` | Windows/PowerShell 文本分析入口 |
 | `helpers/ocr_vision.swift` | macOS Vision OCR 辅助程序 |
 | `helpers/mac_control.swift` | macOS 窗口控制和滚动辅助程序 |
 | `.bin/` | 编译后的本地 helper，忽略提交 |
@@ -63,6 +64,12 @@ UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.p
 ```bash
 UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py ocr /path/to/screenshots
 UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py summarize /path/to/screenshots
+```
+
+Windows 文本兜底：
+
+```powershell
+.\analyze_text.ps1 .\chat.txt .\runs\manual
 ```
 
 清理历史输出：
@@ -105,6 +112,7 @@ scripts/run-agent-task.sh 123
 - 新增功能要保留现有 CLI 参数兼容性。
 - 对 OCR、去重、摘要逻辑的修改，要说明可能影响历史输出格式。
 - 对截图和滚动逻辑的修改，要说明是否需要 Accessibility / Screen Recording 权限。
+- Windows 只支持已有文本总结和可选 Tesseract 截图 OCR；不要把 macOS 自动采集能力描述成 Windows 可用。
 - 不做与任务无关的重构。
 - 修改完成后至少运行 `--help`，能安全运行时再运行 `doctor` 或更具体的命令。
 
