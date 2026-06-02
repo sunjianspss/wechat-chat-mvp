@@ -15,7 +15,7 @@
 ```bash
 cd /Users/sun/Documents/Mac-pro/wechat-chat-mvp
 UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py doctor
-./run_wechat.sh --screens 60 --quality precise
+./run_wechat.sh --screens 80 --quality precise --scroll-amount 3
 ```
 
 第一次使用先开权限：
@@ -70,7 +70,7 @@ runs/YYYYMMDD-HHMMSS/
 截图边缘缺字，调裁剪 `left,top,right,bottom`：
 
 ```bash
-./run_wechat.sh --screens 80 --quality precise --crop 220,50,8,50
+./run_wechat.sh --screens 80 --quality precise --crop 320,70,10,100
 ```
 
 OCR 不准时，优先试更高放大倍率；默认是 `--ocr-mode best --ocr-scale 1.5`：

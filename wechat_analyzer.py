@@ -274,8 +274,8 @@ def apply_quality_profile(args: argparse.Namespace) -> None:
     if profile == "precise":
         args.scroll_amount = min(args.scroll_amount, 4)
         args.delay = max(args.delay, 1.2)
-        if args.crop == (240, 60, 10, 60):
-            args.crop = (220, 50, 8, 50)
+        if args.crop == (305, 70, 10, 90):
+            args.crop = (320, 70, 10, 100)
         return
     raise SystemExit(f"Unknown quality profile: {profile}")
 
@@ -410,6 +410,16 @@ NOISE_PATTERNS = [
     r"^\$.*$",
     r"^\.\/run_wechat\.sh.*$",
     r"^/usr/bin/osascript$",
+    r"^\d{2}/\d{2}$",
+    r"^[UuVv][0-9oOlI]+/[0-9oOlI]+$",
+    r"^[\^•·.。,\-—_~、:：]+$",
+    r"^\^?\s*\d+\s*条新消息$",
+    r"^加载\s*ing$",
+    r"^部推到.*$",
+    r"^务器的.*$",
+    r"^系统优.*$",
+    r"^优化项.*$",
+    r"^程序员的乐.*共\d+条$",
 ]
 
 
@@ -419,9 +429,30 @@ def normalize_text(text: str) -> str:
     return text
 
 
-def is_noise(text: str) -> bool:
+def useful_char_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]", text))
+
+
+def is_noise(text: str, line: dict | None = None) -> bool:
     if len(text) <= 1:
         return True
+    confidence = float(line.get("confidence", 1.0)) if line else 1.0
+    useful = useful_char_count(text)
+    # Vision often assigns high confidence to sidebar dates or tiny UI labels.
+    # Keep low-confidence short lines out of the transcript unless they carry enough content.
+    if confidence < 0.35:
+        return True
+    if confidence < 0.55 and useful < 8:
+        return True
+    if line:
+        x = float(line.get("x", 0.0))
+        y = float(line.get("y", 0.0))
+        # Left-edge fragments usually come from the WeChat conversation list
+        # when crop is too loose. Top/bottom chrome also tends to be UI, not chat.
+        if x < 0.045 and useful < 10:
+            return True
+        if y > 0.965 or y < 0.025:
+            return True
     if len(re.sub(r"[A-Za-z0-9\u4e00-\u9fff]", "", text)) > max(12, len(text) * 0.55):
         return True
     return any(re.match(pattern, text, re.IGNORECASE) for pattern in NOISE_PATTERNS)
@@ -437,7 +468,7 @@ def clean_lines(raw_lines: Iterable[dict], fuzzy_window: int = 60) -> list[dict]
     recent: list[str] = []
     for line in raw_lines:
         text = normalize_text(str(line.get("text", "")))
-        if is_noise(text):
+        if is_noise(text, line):
             continue
         fp = line_fingerprint(text)
         if fp in recent:
@@ -450,6 +481,26 @@ def clean_lines(raw_lines: Iterable[dict], fuzzy_window: int = 60) -> list[dict]
         if len(recent) > fuzzy_window:
             recent.pop(0)
     return cleaned
+
+
+def clean_stats(raw_lines: list[dict], cleaned: list[dict]) -> dict:
+    raw_count = len(raw_lines)
+    avg_raw_conf = (
+        sum(float(line.get("confidence", 0)) for line in raw_lines) / raw_count
+        if raw_count else 0
+    )
+    avg_clean_conf = (
+        sum(float(line.get("confidence", 0)) for line in cleaned) / len(cleaned)
+        if cleaned else 0
+    )
+    return {
+        "raw_lines": raw_count,
+        "cleaned_lines": len(cleaned),
+        "removed_lines": raw_count - len(cleaned),
+        "removed_ratio": (raw_count - len(cleaned)) / raw_count if raw_count else 0,
+        "avg_raw_confidence": avg_raw_conf,
+        "avg_clean_confidence": avg_clean_conf,
+    }
 
 
 def extract_candidates(lines: list[dict], patterns: list[str]) -> list[str]:
@@ -619,6 +670,10 @@ def summarize(args: argparse.Namespace) -> Path:
     raw_lines = json.loads(raw_path.read_text(encoding="utf-8"))
     lines = clean_lines(raw_lines, fuzzy_window=args.dedupe_window)
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "clean_stats.json").write_text(
+        json.dumps(clean_stats(raw_lines, lines), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     summary_path = write_markdown(out_dir, lines)
     print(f"[summarize] wrote: {summary_path}")
     return out_dir
@@ -801,7 +856,7 @@ def add_capture_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--crop",
         type=parse_crop,
-        default=(240, 60, 10, 60),
+        default=(305, 70, 10, 90),
         help="Crop inside WeChat window as left,top,right,bottom",
     )
     parser.add_argument("-o", "--output", type=Path, help="Run output directory")
