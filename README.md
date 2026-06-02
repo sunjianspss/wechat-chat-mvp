@@ -132,8 +132,8 @@ OCR 不准时，优先试更高放大倍率；默认是 `--ocr-mode best --ocr-s
 ## 已有截图
 
 ```bash
-UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py ocr /path/to/screenshots
-UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py summarize /path/to/screenshots
+UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py ocr /path/to/run/screenshots
+UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py summarize /path/to/run
 ```
 
 Windows 已有截图使用：

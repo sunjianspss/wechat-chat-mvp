@@ -2,8 +2,10 @@
 """
 Local WeChat chat analyzer MVP.
 
-It captures visible WeChat chat screens, OCRs screenshots with macOS Vision,
-deduplicates repeated lines, and writes local Markdown/JSON outputs.
+On macOS it captures visible WeChat chat screens, OCRs screenshots with
+macOS Vision, deduplicates repeated lines, and writes local Markdown/JSON
+outputs. On other platforms it can summarize existing text, or OCR imported
+screenshots through Tesseract.
 """
 
 from __future__ import annotations
@@ -360,6 +362,13 @@ def join_ocr_words(words: list[str]) -> str:
     return re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text).strip()
 
 
+def parse_tsv_int(row: dict, key: str, default: int = 0) -> int:
+    try:
+        return int(float(row.get(key) or default))
+    except ValueError:
+        return default
+
+
 def run_tesseract_ocr(image: Path, languages: str) -> list[dict]:
     ensure_tool("tesseract")
     try:
@@ -375,24 +384,28 @@ def run_tesseract_ocr(image: Path, languages: str) -> list[dict]:
 
     rows = list(csv.DictReader(result.stdout.splitlines(), delimiter="\t"))
     groups: dict[tuple[str, str, str, str], list[dict]] = {}
-    max_right = 1
-    max_bottom = 1
+    page_width = 1
+    page_height = 1
     for row in rows:
+        left = parse_tsv_int(row, "left")
+        top = parse_tsv_int(row, "top")
+        width = parse_tsv_int(row, "width")
+        height = parse_tsv_int(row, "height")
+        if row.get("level") == "1":
+            page_width = max(page_width, width)
+            page_height = max(page_height, height)
+            continue
         text = (row.get("text") or "").strip()
         if not text:
             continue
         try:
             confidence = float(row.get("conf") or -1)
-            left = int(float(row.get("left") or 0))
-            top = int(float(row.get("top") or 0))
-            width = int(float(row.get("width") or 0))
-            height = int(float(row.get("height") or 0))
         except ValueError:
             continue
         if confidence < 0:
             continue
-        max_right = max(max_right, left + width)
-        max_bottom = max(max_bottom, top + height)
+        page_width = max(page_width, left + width)
+        page_height = max(page_height, top + height)
         key = (
             row.get("page_num") or "1",
             row.get("block_num") or "0",
@@ -422,10 +435,10 @@ def run_tesseract_ocr(image: Path, languages: str) -> list[dict]:
         lines.append({
             "text": text,
             "confidence": confidence,
-            "x": left / max_right,
-            "y": 1.0 - (bottom / max_bottom),
-            "width": (right - left) / max_right,
-            "height": (bottom - top) / max_bottom,
+            "x": left / page_width,
+            "y": 1.0 - (bottom / page_height),
+            "width": (right - left) / page_width,
+            "height": (bottom - top) / page_height,
             "source": str(image),
             "ocr_mode": "tesseract",
         })
@@ -499,9 +512,24 @@ def ocr(args: argparse.Namespace) -> Path:
     return out_dir
 
 
+def read_text_with_fallback(path: Path) -> str:
+    encodings = ["utf-8-sig", "utf-8", "gb18030"]
+    errors: list[str] = []
+    for encoding in encodings:
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError as exc:
+            errors.append(f"{encoding}: {exc}")
+    raise SystemExit(
+        f"Cannot decode text file: {path}\n"
+        "Tried utf-8, utf-8-sig, and gb18030. Please save the file as UTF-8.\n"
+        + "\n".join(errors)
+    )
+
+
 def raw_lines_from_text(path: Path) -> list[dict]:
     lines: list[dict] = []
-    for index, text in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for index, text in enumerate(read_text_with_fallback(path).splitlines(), start=1):
         text = text.strip()
         if not text:
             continue
@@ -786,10 +814,16 @@ def summarize(args: argparse.Namespace) -> Path:
     if input_path.is_dir():
         raw_path = input_path / "ocr_raw.json"
         out_dir = input_path
+        if not raw_path.exists() and input_path.name == "screenshots":
+            parent_raw_path = input_path.parent / "ocr_raw.json"
+            if parent_raw_path.exists():
+                raw_path = parent_raw_path
+                out_dir = input_path.parent
         if not raw_path.exists():
             raise SystemExit(
                 f"OCR JSON not found: {raw_path}\n"
-                "For Windows/manual use, pass a text file directly: "
+                "If you just ran OCR on a `screenshots` folder, summarize the run directory "
+                "or pass a text file directly: "
                 "`python wechat_analyzer.py summarize chat.txt -o runs/manual`."
             )
         raw_lines = json.loads(raw_path.read_text(encoding="utf-8"))

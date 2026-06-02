@@ -62,8 +62,8 @@ UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.p
 处理已有截图：
 
 ```bash
-UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py ocr /path/to/screenshots
-UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py summarize /path/to/screenshots
+UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py ocr /path/to/run/screenshots
+UV_CACHE_DIR=/private/tmp/uv-cache uv run --python 3.12 python wechat_analyzer.py summarize /path/to/run
 ```
 
 Windows 文本兜底：
