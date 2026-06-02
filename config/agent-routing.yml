@@ -1,0 +1,73 @@
+version: 1
+
+defaults:
+  max_auto_fix_rounds: 3
+  require_human_merge: true
+  require_human_production_deploy: true
+  require_acceptance_criteria: true
+
+agents:
+  codex:
+    description: "Architecture, implementation, testing, review, CI debugging"
+    runner: "local-cli"
+    command: "codex"
+  kimi:
+    description: "Long-context implementation and documentation-heavy tasks"
+    runner: "local-cli"
+    command: "kimi"
+  deepseek:
+    description: "UI implementation and frontend polishing"
+    runner: "local-cli"
+    command: "deepseek"
+  reviewer:
+    description: "Independent review, risk analysis, and CI failure triage"
+    runner: "local-cli"
+    command: "codex"
+
+routes:
+  - name: architecture
+    labels: ["architecture", "arch", "design"]
+    agent: "codex"
+    required_checks: ["plan", "risk-review"]
+
+  - name: backend
+    labels: ["backend", "api", "database"]
+    agent: "kimi"
+    required_checks: ["unit-tests", "integration-tests"]
+
+  - name: frontend
+    labels: ["frontend", "ui", "ux"]
+    agent: "deepseek"
+    required_checks: ["build", "browser-check"]
+
+  - name: tests
+    labels: ["test", "qa"]
+    agent: "codex"
+    required_checks: ["test-suite"]
+
+  - name: ci
+    labels: ["ci", "ci-failed", "github-actions"]
+    agent: "codex"
+    required_checks: ["ci-pass"]
+
+  - name: review
+    labels: ["review", "risk"]
+    agent: "reviewer"
+    required_checks: ["diff-review"]
+
+  - name: deploy
+    labels: ["deploy", "release"]
+    agent: "codex"
+    required_checks: ["human-approval", "rollback-plan"]
+
+blocked_labels:
+  - "needs-human"
+  - "missing-acceptance-criteria"
+  - "blocked"
+
+notification:
+  channels:
+    - "slack"
+    - "feishu"
+    - "coze"
+  done_template: "templates/done-notification.md"

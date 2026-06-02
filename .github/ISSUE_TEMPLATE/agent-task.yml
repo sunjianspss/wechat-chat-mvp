@@ -1,0 +1,77 @@
+name: Agent Task
+description: Create a task that can be picked up by an AI coding agent
+title: "[Agent Task] "
+labels: ["agent-task", "needs-routing"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: Why does this task matter?
+      placeholder: "Describe the context, user problem, or business need."
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be completed?
+      placeholder: "A concise description of the desired result."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: The agent must satisfy these before opening a PR.
+      placeholder: |
+        - ...
+        - ...
+        - ...
+    validations:
+      required: true
+  - type: dropdown
+    id: task_type
+    attributes:
+      label: Task Type
+      options:
+        - architecture
+        - backend
+        - frontend
+        - ui
+        - test
+        - docs
+        - ci
+        - deploy
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: What must not be changed?
+      placeholder: |
+        - Do not change production secrets.
+        - Do not modify unrelated modules.
+        - Do not deploy without human approval.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Required Verification
+      description: Which commands, checks, or manual validations are required?
+      placeholder: |
+        - npm test
+        - npm run build
+        - Manual browser check for ...
+    validations:
+      required: true
+  - type: textarea
+    id: source_message
+    attributes:
+      label: Source Message
+      description: Original Slack / Feishu / Coze message.
+      placeholder: "Paste the original message here."
+    validations:
+      required: false

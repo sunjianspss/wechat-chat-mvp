@@ -1,0 +1,43 @@
+name: Deploy Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+      pr_number:
+        description: "Approved PR number"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-gate:
+    name: Manual deployment gate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Confirm manual deployment
+        shell: bash
+        run: |
+          echo "Manual deployment requested."
+          echo "Environment: ${{ inputs.environment }}"
+          echo "PR number: ${{ inputs.pr_number }}"
+          echo "This workflow is only a gate until project-specific checks and deployment commands are configured."
+
+      - name: Require project deployment implementation
+        shell: bash
+        run: |
+          echo "Add checks for merged PR, passing CI, approver permission, rollback plan, and deployment command."
+          exit 1

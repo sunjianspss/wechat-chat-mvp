@@ -1,0 +1,80 @@
+name: Agent CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  validate-agent-task:
+    name: Validate agent task
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Confirm PR has a linked issue
+        id: linked_issue
+        shell: bash
+        run: |
+          body_file="$(mktemp)"
+          cat > "$body_file" <<'PR_BODY'
+          ${{ github.event.pull_request.body }}
+          PR_BODY
+          issue_number="$(grep -Eio '(closes|fixes|resolves) #[0-9]+' "$body_file" | head -n 1 | grep -Eo '[0-9]+')"
+          if [ -z "$issue_number" ]; then
+            echo "PR must link an issue with Closes #123, Fixes #123, or Resolves #123."
+            exit 1
+          fi
+          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
+
+      - name: Validate linked agent task
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if [ -x scripts/validate-agent-task.sh ]; then
+            scripts/validate-agent-task.sh "${{ steps.linked_issue.outputs.issue_number }}"
+          else
+            echo "scripts/validate-agent-task.sh is required for agent-managed PRs."
+            exit 1
+          fi
+
+  project-checks:
+    name: Project checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run project checks
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            corepack enable
+            if [ -f pnpm-lock.yaml ]; then
+              pnpm install --frozen-lockfile
+              pnpm test --if-present
+              pnpm run build --if-present
+            elif [ -f yarn.lock ]; then
+              yarn install --frozen-lockfile
+              yarn test --if-present
+              yarn build --if-present
+            else
+              npm ci
+              npm test --if-present
+              npm run build --if-present
+            fi
+          elif [ -f pyproject.toml ]; then
+            python -m pip install --upgrade pip
+            python -m pip install .
+            python -m pytest
+          else
+            echo "No project check command configured."
+            echo "Edit .github/workflows/agent-ci.yml for this repository before accepting agent PRs."
+            exit 1
+          fi
